@@ -220,6 +220,4 @@ dependencies:
   - zstd=1.5.5=hc035e20_0
   - pip:
       - himalaya==0.4.2
-      - python-graphviz==0.20.1
-      - torchviz==0.0.2
 prefix: /Users/castrong/opt/miniconda3/envs/HRIFinalProject2
