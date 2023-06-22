@@ -13,6 +13,19 @@ from deep_brain_irl.src.utils.delayer import Delayer
 seconds_per_TR = 2.0045
 
 
+class Params:
+    road_width = 1200
+
+    def __init__(self, k_closest_vehicles, k_closest_pedestrians, length_sub_trajectory, dt_samples_sub_trajectory, subsample_sub_trajectories, seconds_per_sample):
+        self.k_closest_vehicles = k_closest_vehicles
+        self.k_closest_pedestrians = k_closest_pedestrians
+        self.length_sub_trajectory = length_sub_trajectory
+        self.dt_samples_sub_trajectory = dt_samples_sub_trajectory
+        self.subsample_sub_trajectories = subsample_sub_trajectories
+        self.seconds_per_sample = seconds_per_sample
+        if dt_samples_sub_trajectory is not None and seconds_per_sample is not None:    
+            self.dt_sub_trajectory = dt_samples_sub_trajectory * seconds_per_sample
+
 def vehicle_index_to_col(index):
     return 4 + 4*index
 
@@ -32,7 +45,7 @@ def tr_to_raw_index(parser, TR, fps=None):
         fps = parser.FPS
 
     # Note this is raw accessed by parser.playerPosition, and not by parser.GetPlayerPositions() which shifts by the firstTRFrame
-    return math.floor((parser.firstTRFrame + TR * seconds_per_TR * parser.FPS) * fps/parser.FPS)
+    return math.ceil((parser.firstTRFrame + TR * seconds_per_TR * parser.FPS) * fps/parser.FPS) # thinking ceil by drawing line at index, and past that is where it starts
 
 def raw_index_to_tr(parser, index, fps=None):
     """
@@ -49,6 +62,50 @@ def raw_index_to_tr(parser, index, fps=None):
     # Would behavior here make more sense as round or int (to round down always)? 
     # if you imagine changing the raw index, when do you want it to flip between TRs?
     return math.floor(seconds_from_start / seconds_per_TR)
+
+def average_over_TRs(parser, features, fps_feature=None):
+    """    
+        feature is a 2d array of features, num_frames x feature_dim
+        fps_feature gives the features per second of this particular feature. For something like the raw 
+        player positions from the parser, this would be parser.FPS. For the images, which go at a rate of 30 
+        instead of 15, this would be 30. This defaults to parser.FPS
+
+        Returns a 2d array where the features are averaged across each TR. Returns num_TRs x feature_dim. 
+    """
+    averaged_features = np.zeros((parser.nTRs, features.shape[1]))
+    for TR in range(parser.nTRs):
+        start_index = tr_to_raw_index(parser, TR, fps_feature)
+        end_index = tr_to_raw_index(parser, TR + 1, fps_feature)
+        averaged_features[TR, :] = np.mean(features[start_index:end_index, :], axis=0)
+
+    return averaged_features
+
+def get_sub_trajectories(demonstration_states, params):
+    """
+        Get sub-trajectories from a demonstration given by a num_samples (time) x num_states matrix. 
+
+        params.length_sub_trajectory gives the number of samples in the sub-trajectory.
+        params.dt_samples_sub_trajectory gives the number of frames between every point in the sub-trajectory (e.g. a point every second for it)
+        params.subsample_sub_trajectory gives the 
+
+        We will start at index 0, and take trajectories of length length spaced by dt_samples. 
+        We'll then step forward by subsample, and do the same thing again, pulling out a trajectory with each point 
+        separated by dt_samples.  
+    """
+    length, dt_samples, subsample = params.length_sub_trajectory, params.dt_samples_sub_trajectory, params.subsample_sub_trajectories
+    num_samples_for_sub_trajectory = 1 + (length - 1) * dt_samples
+    num_sub_trajectories = math.floor((demonstration_states.shape[0] - num_samples_for_sub_trajectory) / subsample) + 1 # +1 bc if shape is same as num_samples_for_sub_trajectory then you can do 1 not 0. 
+
+    if num_sub_trajectories < 0:
+        print("trajectory is not long enough: ", demonstration_states.shape[0], " samples, where we'd need ", num_samples_for_sub_trajectory, " samples.")
+        return np.zeros((0, length, demonstration_states.shape[1]))
+
+    sub_trajectories = np.zeros((num_sub_trajectories, length, demonstration_states.shape[1]))
+
+    for i in range(num_sub_trajectories):
+        sub_trajectories[i, :, :] = demonstration_states[i*subsample:i*subsample + length*dt_samples:dt_samples, :]
+
+    return sub_trajectories
 
 
 def stack_demonstrations(demonstrations):
